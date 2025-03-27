@@ -13,6 +13,7 @@ from dataset.popQA import PopQADataset
 from utils.patch_utils import InspectOutput, parse_layer_idx  # your hook-based class
 from utils.save_activations import combine_activations  
 
+
 @torch.inference_mode()
 @hydra.main(config_path="../configs", config_name="config")
 def main(cfg: DictConfig):
@@ -61,44 +62,16 @@ def main(cfg: DictConfig):
     model.eval()
     # Process each batch: generate responses and capture/save activations
     with torch.no_grad():
-        # for bid, batch in enumerate(dataloader):
-        #     prompts = batch["prompt"]
-        #     metadata = batch["metadata"]
-            
-        #     # Wrap the forward pass in the hook context to capture activations.
-        #     # The generation call (generate_text_batch) runs the forward pass.
-        #     with InspectOutput(model, module_names, move_to_cpu=True, last_position=True) as inspector:
-        #         model_answers = generate_text_batch(model, tokenizer, prompts, max_length=30)
-            
-        #     # Save generated responses (answers) to CSV
-        #     save_answers_csv(metadata, model_answers, model_name)
-            
-        #     # Iterate through the captured activations and save each to file.
-        #     # Each file is named with the layer and batch (example) id.
-        #     for module, ac in inspector.catcher.items():
-        #         # ac is expected to have shape [batch_size, hidden_dim]; since batch_size==1, we use ac[0]
-        #         ac_last = ac[0].float()
-        #         # Parse the layer index from the module name (assumes format "model.layers.{idx}...")
-        #         layer_idx = int(module.split(".")[2])
-        #         save_name = f"layer{layer_idx}-id{bid}.pt"
-        #         if "mlp" in module:
-        #             torch.save(ac_last, mlp_save_dir / save_name)
-        #         elif "self_attn" in module:
-        #             torch.save(ac_last, attn_save_dir / save_name)
-        #         else:
-        #             torch.save(ac_last, hidden_save_dir / save_name)
-
-        #loop for capturing the activation of the last prompt's token
-        # Loop for capturing the activation of the entire sequence
         for bid, batch in enumerate(dataloader):
-            prompts = batch["prompt"]
+            prompts = "Mi dai la definizione di Quantum Computing"
             metadata = batch["metadata"]
             
             with InspectOutput(model, module_names, move_to_cpu=True, last_position=False) as inspector:
-                model_answers = generate_text_batch(model, tokenizer, prompts, max_length=30)
+                model_answers = generate_text_batch(model, tokenizer, prompts, max_length=3000)
 
             # Save generated responses (answers) to CSV
             save_answers_csv(metadata, model_answers, model_name)
+            print("Answer: ", model_answers)
 
             # Now iterate through the captured activations.
             # The captured activation for each module is a tensor of shape [batch_size, seq_length, hidden_dim]
