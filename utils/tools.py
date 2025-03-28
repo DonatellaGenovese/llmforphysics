@@ -11,13 +11,15 @@ import random
 def load_model(model_name: str, 
                use_flash_attention: bool = False, 
                device: str = "cuda", 
-               torch_dtype=torch.float16) -> (torch.nn.Module, AutoTokenizer):
+               torch_dtype=torch.float16, 
+               quantization: bool = False) -> (torch.nn.Module, AutoTokenizer):
     
+    #fix configuration from pretrained model
     config = AutoConfig.from_pretrained(model_name)
+    #fix tokenizer from pretrained model 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    quantization_config = BitsAndBytesConfig(load_in_8bit=True, llm_int8_enable_fp32_cpu_offload=True)
-    if model_name == "meta-llama/Llama-3.3-70B-Instruct":
-        
+    if quantization == True:
+        quantization_config = BitsAndBytesConfig(load_in_8bit=True, llm_int8_enable_fp32_cpu_offload=True)
         model = AutoModelForCausalLM.from_pretrained(
         model_name, 
         config=config,
@@ -31,8 +33,7 @@ def load_model(model_name: str,
         model_name, 
         config=config,
         torch_dtype=torch_dtype,
-        device_map="auto",
-        quantization_config=quantization_config
+        device_map="auto"
         )
         
         

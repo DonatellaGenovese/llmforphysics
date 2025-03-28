@@ -9,20 +9,20 @@ from pathlib import Path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from utils.tools import load_model, load_gemma3_model, generate_text_batch, save_answers_csv
-from dataset.popQA import PopQADataset
+from dataset.popQA import PopQADataset 
 from utils.patch_utils import InspectOutput, parse_layer_idx  # your hook-based class
 from utils.save_activations import combine_activations  
 
 
-@torch.inference_mode()
-@hydra.main(config_path="../configs", config_name="config")
+@torch.inference_mode() # Disables gradient computation for better efficiency
+@hydra.main(config_path="../configs", config_name="config") # Load configuration file
 def main(cfg: DictConfig):
     # Load model and tokenizer
     if cfg.model.model_name == "google/gemma-3-27b-it":
         model, tokenizer = load_gemma3_model(cfg.model.model_name, use_flash_attention=cfg.model.use_flash_attention, device=cfg.device)
     
     else:
-        model, tokenizer = load_model(cfg.model.model_name, use_flash_attention=cfg.model.use_flash_attention, device=cfg.device)
+        model, tokenizer = load_model(cfg.model.model_name, use_flash_attention=cfg.model.use_flash_attention, device=cfg.device, quantization = False)
         
     # Load dataset and create dataloader
     if cfg.dataset.dataset_name == "popQA":
@@ -91,9 +91,9 @@ def main(cfg: DictConfig):
                     torch.save(ac_full[0], hidden_save_dir / save_name)
 
         # After processing all batches, combine individual activation files into one tensor per layer.
-        combine_activations(save_dir, target_layers=list(range(num_layer)),
-                            activation_type=activation_type,
-                            analyse_activation_list=["mlp", "attn", "hidden"])
+        #combine_activations(save_dir, target_layers=list(range(num_layer)),
+        #                    activation_type=activation_type,
+        #                    analyse_activation_list=["mlp", "attn", "hidden"])
 
     
 if __name__ == '__main__':
