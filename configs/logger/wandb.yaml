@@ -1,4 +1,4 @@
 _target_: utils.logger.WandbLogger
-wandb_entity: 'simone-yeezy' # set to your username
-wandb_project: 'haleval'     # set to your project name
+wandb_entity: 'donatella-org' # set to your username
+wandb_project: 'llmforphysics'     # set to your project name
 wandb_run: '${experiment_name}'

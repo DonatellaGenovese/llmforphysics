@@ -1,7 +1,0 @@
-# configs/dataset/truthfulqa.yaml
-dataset_name: "truthfulqa"
-split: "test"
-max_length: 512
-batch_size: 8
-shuffle: false
-num_workers: 16

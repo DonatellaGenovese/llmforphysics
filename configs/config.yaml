@@ -7,8 +7,9 @@ seed: 0
 
 
 defaults:
-  - model: gemma-2-2b
-  - dataset: popQA
+  - _self_
+  - model: Llama-3.1-8B-Instruct
+  - dataset: Susy
   - evaluation: eval
   - logger: wandb
   

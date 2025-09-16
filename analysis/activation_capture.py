@@ -5,35 +5,66 @@ import torch
 from torch.utils.data import DataLoader
 import sys
 from pathlib import Path
+from torch_geometric.data import Batch
+import random
+import numpy as np
+from sklearn.model_selection import train_test_split
+from torch_geometric.loader import DataLoader as GeoDataLoader
+from torch_geometric.data import Batch
+
+
+
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from utils.tools import load_model, load_gemma3_model, generate_text_batch, save_answers_csv
-from dataset.popQA import PopQADataset 
+from dataset.Susy import build_feature_map_Susy, compose_prompt
+from sparticles import EventsDataset
 from utils.patch_utils import InspectOutput, parse_layer_idx  # your hook-based class
 from utils.save_activations import combine_activations  
 
-
 @torch.inference_mode() # Disables gradient computation for better efficiency
-@hydra.main(config_path="../configs", config_name="config") # Load configuration file
+@hydra.main(config_path="../configs", config_name="config", version_base=None) # Load configuration file
 def main(cfg: DictConfig):
+    print('model name',cfg.model.model_name)
+    
+    seed = cfg.seed if "seed" in cfg else 42
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    
     # Load model and tokenizer
     if cfg.model.model_name == "google/gemma-3-27b-it":
         model, tokenizer = load_gemma3_model(cfg.model.model_name, use_flash_attention=cfg.model.use_flash_attention, device=cfg.device)
     
     else:
-        model, tokenizer = load_model(cfg.model.model_name, use_flash_attention=cfg.model.use_flash_attention, device=cfg.device, quantization = False)
+        model, tokenizer = load_model(cfg.model.model_name, use_flash_attention=cfg.model.use_flash_attention, device=cfg.device, resume_download=True, quantization = False)
         
+        
+    #print('configurazione:',cfg)
     # Load dataset and create dataloader
-    if cfg.dataset.dataset_name == "popQA":
-        dataset = PopQADataset(tokenizer, split=cfg.dataset.split, max_length=cfg.dataset.max_length)
-    dataloader = DataLoader(dataset,
-                            batch_size=cfg.dataset.batch_size,
-                            num_workers=cfg.dataset.num_workers)
+    dataset = EventsDataset(
+    root='~/Desktop',
+    url='https://cernbox.cern.ch/s/0nh0g7VubM4ndoh/download',
+    delete_raw_archive=False,
+    add_edge_index=True,
+    event_subsets={'signal': 10000, 'singletop': 5000, 'ttbar': 5000},
+    download_type=1
+    )
+    trainset, testset = train_test_split(dataset, test_size = 0.2)
+    trainset, evalset = train_test_split(trainset, test_size = 0.2)
+    
+    train_loader = GeoDataLoader(trainset, shuffle=True, batch_size=16)
+    eval_loader  = GeoDataLoader(evalset, shuffle=True, batch_size=16)
+    test_loader  = GeoDataLoader(testset, shuffle=False, batch_size=16)
     
     # Set up directory for saving answers and activations
     model_name = cfg.model.model_name.split("/")[-1]
     data_name = cfg.dataset.dataset_name
+    print('data_name',data_name)
     save_dir = Path("cached_data") / model_name / data_name
     os.makedirs(save_dir, exist_ok=True)
 
@@ -62,33 +93,38 @@ def main(cfg: DictConfig):
     model.eval()
     # Process each batch: generate responses and capture/save activations
     with torch.no_grad():
-        for bid, batch in enumerate(dataloader):
-            prompts = "Mi dai la definizione di Quantum Computing"
-            metadata = batch["metadata"]
-            
-            with InspectOutput(model, module_names, move_to_cpu=True, last_position=False) as inspector:
-                model_answers = generate_text_batch(model, tokenizer, prompts, max_length=3000)
+        for bid, data in enumerate(test_loader):
+            individual_graphs = data.to_data_list() 
+            for i, graph in enumerate(individual_graphs):
+                feature_map = build_feature_map_Susy(graph)  # ✅ Now safe
+                prompt = compose_prompt(graph, feature_map)
 
-            # Save generated responses (answers) to CSV
-            save_answers_csv(metadata, model_answers, model_name)
-            print("Answer: ", model_answers)
+                print(f"\nPrompt for event {bid}-{i}:\n{prompt}\n")
 
-            # Now iterate through the captured activations.
-            # The captured activation for each module is a tensor of shape [batch_size, seq_length, hidden_dim]
-            for module, ac in inspector.catcher.items():
-                # Instead of indexing by prompt_last_positions, capture the full sequence.
-                ac_full = ac.float()  # ac_full has shape [batch_size, seq_length, hidden_dim]
+                with InspectOutput(model, module_names, move_to_cpu=True) as inspector:
+                     responses = generate_text_batch(model, tokenizer, [prompt], max_length=200)
 
-                # For simplicity, if batch_size == 1, we use the first (and only) example.
-                # Otherwise, you might want to save each example separately.
-                layer_idx = parse_layer_idx(module)
-                save_name = f"layer{layer_idx}-id{bid}.pt"
-                if "mlp" in module:
-                    torch.save(ac_full[0], mlp_save_dir / save_name)
-                elif "self_attn" in module:
-                    torch.save(ac_full[0], attn_save_dir / save_name)
-                else:
-                    torch.save(ac_full[0], hidden_save_dir / save_name)
+                for response in responses:
+                    label = graph.y.item()
+                    save_answers_csv(
+                    [response['main_response']],
+                    [label],
+                    [response['additional_info']],
+                    [prompt],
+                    save_dir / f"answers_{model_name}.csv"
+                 )
+                print(f"Graph {bid}-{i} Classification: {response['main_response']}")
+                print(f"Details: {response['additional_info']}\n{'-'*50}")
+
+            #for module, ac in inspector.catcher.items():
+            #    layer_idx = parse_layer_idx(module)
+            #    fname = f"layer{layer_idx}-id{bid}.pt"
+            #    if "mlp" in module:
+            #        torch.save(ac[0].float(), mlp_save_dir / fname)
+            #    elif "self_attn" in module:
+            #        torch.save(ac[0].float(), attn_save_dir / fname)
+            #    else:
+            #        torch.save(ac[0].float(), hidden_save_dir / fname)
 
         # After processing all batches, combine individual activation files into one tensor per layer.
         #combine_activations(save_dir, target_layers=list(range(num_layer)),

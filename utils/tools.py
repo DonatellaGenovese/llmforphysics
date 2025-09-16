@@ -12,7 +12,8 @@ def load_model(model_name: str,
                use_flash_attention: bool = False, 
                device: str = "cuda", 
                torch_dtype=torch.float16, 
-               quantization: bool = False) -> (torch.nn.Module, AutoTokenizer):
+               quantization: bool = False, 
+               resume_download: bool =True) -> (torch.nn.Module, AutoTokenizer):
     
     #fix configuration from pretrained model
     config = AutoConfig.from_pretrained(model_name)
@@ -93,117 +94,73 @@ def load_gemma3_model(model_name: str,
     return model, tokenizer
 
 
-def generate_responses_for_popqa_batch(model, tokenizer, device, output_csv="gemma2b_popqa_responses.csv"):
-    # Load the dataset and convert to a list for efficient sampling
-    ds_split = load_dataset("akariasai/PopQA")['test']
-    ds_list = list(ds_split)
-    total_examples = len(ds_list)
-    
-    fieldnames = ["idx", "question", "possible_answers", "model_response"]
-    with open(output_csv, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        
-        # Process the dataset in batches of 100 examples
-        batch_size_prompt = 10
-        for batch_start in range(0, total_examples, batch_size_prompt):
-            prompts = []
-            metadata = []  # To store (idx, question, possible_answers)
-            # Create prompt list for the current chunk
-            for idx in range(batch_start, min(batch_start + batch_size_prompt, total_examples)):
-                example = ds_list[idx]
-                question = example["question"]
-                possible_answers = (
-                    " | ".join(example["possible_answers"]) 
-                    if isinstance(example["possible_answers"], list) 
-                    else example["possible_answers"]
-                )
-                # Select 10 random examples from the pre-converted list for context
-                examples = random.sample(ds_list, 10)
-                example_texts = "\n\n".join(
-                    [
-                        f"Example {i+1}:\nQuestion: {ex['question']}\nAnswer: {ex['possible_answers'].split(' | ')[0]}"
-                        if isinstance(ex["possible_answers"], str)
-                        else f"Example {i+1}:\nQuestion: {ex['question']}\nAnswer: {ex['possible_answers'][0]}"
-                        for i, ex in enumerate(examples)
-                    ]
-                )
-    
-                prompt = f"""Answer the following questions concisely and accurately, using no more than one sentence. Follow the format of the examples provided.
-
-{example_texts}
-
-Now, answer the following:
-Question: {question}
-Answer:"""
-                prompts.append(prompt)
-                metadata.append((idx, question, possible_answers))
-            
-            # Process the current chunk using the list of prompt strings
-            
-            model_answers = generate_text_batch(prompts, max_new_tokens=100, batch_size=10)
-    
-            # Save the responses to CSV along with the associated metadata
-            for (idx, question, possible_answers), model_answer in zip(metadata, model_answers):
-                writer.writerow({
-                    "idx": idx,
-                    "question": question,
-                    "possible_answers": possible_answers,
-                    "model_response": model_answer
-                })
-            del prompts, metadata, model_answers
-            torch.cuda.empty_cache()  # Free up cached GPU memory
-            print(f"Finished processing batch starting at index {batch_start} to {min(batch_start + batch_size_prompt, total_examples)-1}")
-
+import torch
 
 def generate_text_batch(model, tokenizer, prompts, max_length=30, device="cuda"):
-    inputs = tokenizer(prompts, return_tensors="pt", padding=True, truncation=True)
-    input_ids = inputs["input_ids"]
+    # Tokenize the prompts
+    inputs = tokenizer(prompts, return_tensors="pt", padding=True, truncation=False)
     inputs = {k: v.to(device) for k, v in inputs.items()}
-    
+
+    # Generation settings
     generation_config = {
         "max_new_tokens": max_length,
-        "temperature": 0,
-        "do_sample": False,
+        "temperature": 0.2,
+        "do_sample": True,
         "return_dict_in_generate": True,
-        "output_scores": False
+        "output_scores": False,
+        "pad_token_id": tokenizer.eos_token_id
     }
-    
+
+    # Generate responses
     with torch.no_grad():
         outputs = model.generate(**inputs, **generation_config)
-    
-    generated_sequences = outputs.sequences if hasattr(outputs, "sequences") else outputs
-    responses = []
-    
-    # Decode full generated sequences
+
+    generated_sequences = outputs.sequences
     full_texts = tokenizer.batch_decode(generated_sequences, skip_special_tokens=True)
-    
-    # For each prompt, remove its text from the full generated output.
-    for prompt, full_text in zip(prompts, full_texts):
-        # If the full text starts with the prompt, remove it
-        if full_text.startswith(prompt):
-            response = full_text[len(prompt):].strip()
+
+    print('full_texts:', full_texts)
+
+    responses = []
+
+    for full_text in full_texts:
+        main_response = ""
+        additional_info = ""
+
+        if "Answer:" in full_text:
+            answer_part = full_text.rsplit("Answer:", 1)[-1].strip()
+            parts = answer_part.split(maxsplit=1)
+
+            if len(parts) >= 1:
+                main_response = parts[0].strip()
+            if len(parts) == 2:
+                additional_info = parts[1].strip()
+
         else:
-            # Fallback if it doesn't match exactly: try to remove up to a known separator,
-            # for example, "Now, answer the following:" if your prompt always includes it.
-            response = full_text
-        responses.append(response)
-    
+            parts = full_text.strip().split(maxsplit=1)
+            if len(parts) >= 1:
+                main_response = parts[0]
+            if len(parts) == 2:
+                additional_info = parts[1]
+
+        responses.append({
+            "main_response": main_response,
+            "additional_info": additional_info
+        })
+
     return responses
 
 
 
-    
-    
 
+    
 def generate_text(model, tokenizer, prompt, max_length=30, device="cuda"):
     
     input_ids = tokenizer(prompt, return_tensors="pt", padding=True).to(device)
 
     generation_config = {
         "max_new_tokens": max_length,
-        "temperature": 0,
-        "do_sample": False,
+        "temperature": 0.3,
+        "do_sample": True,
         "return_dict_in_generate": True,
         "output_scores": False
     }
@@ -216,19 +173,19 @@ def generate_text(model, tokenizer, prompt, max_length=30, device="cuda"):
     
     
 
-def save_answers_csv(metadata, model_answers, output):
+def save_answers_csv(model_answers, original_labels, additional_info, output):
     file_exists = os.path.exists(output)
     with open(output, "a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["idx", "question", "possible_answers", "model_response"])
+        writer = csv.DictWriter(f, fieldnames=["model_response", "original_label", "additional_info"])
+        
         if not file_exists:
             writer.writeheader()
-        for idx, question, possible_answers, model_answer in zip(
-            metadata["idx"], metadata["question"], metadata["possible_answers"], model_answers
-        ):
+        
+        for model_answer, label, info in zip(model_answers, original_labels, additional_info):
             writer.writerow({
-                "idx": idx,
-                "question": question,
-                "possible_answers": possible_answers,
-                "model_response": model_answer
+                "model_response": model_answer,
+                "original_label": label,
+                "additional_info": info
             })
     torch.cuda.empty_cache()
+    

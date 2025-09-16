@@ -1,4 +1,5 @@
 torch>=2.1.0
+torch_geometric
 tqdm
 numpy
 transformer_lens
@@ -10,3 +11,7 @@ seaborn
 scikit-learn
 hydra-core
 sae_lens
+git+https://github.com/alessiodevoto/sparticles.git
+tables
+pandas
+dspy
